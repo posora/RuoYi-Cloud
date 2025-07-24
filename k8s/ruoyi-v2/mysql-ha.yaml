@@ -1,0 +1,164 @@
+---
+# 1. ConfigMap：主从通用 MySQL 配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+  namespace: ruoyi-v2
+data:
+  mysql-master.cnf: |
+    [mysqld]
+    server-id=1
+    read-only=0
+    log-bin=mysql-bin
+    binlog-do-db=ruoyi_vue_pro
+    skip-name-resolve
+
+  mysql-slave.cnf: |
+    [mysqld]
+    server-id=2
+    read-only=1
+    replicate-do-db=ruoyi_vue_pro
+    skip-name-resolve
+
+---
+# 2. Service：主从共用的无头 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: ruoyi-v2
+spec:
+  clusterIP: None
+  selector:
+    app: mysql
+  ports:
+  - port: 3306
+    name: mysql
+
+---
+# 3. StatefulSet：MySQL 主从（副本为 2，0 为主，1 为从）
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: ruoyi-v2
+spec:
+  serviceName: mysql
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      initContainers:
+      - name: init-db
+        image: busybox:1.30
+        command: ["sh","-c","cp /init-db/*.sql /mnt/init-db"]
+        volumeMounts:
+        - name: init-db-volume
+          mountPath: /mnt/init-db
+        - name: init-db
+          mountPath: /init-db
+      - name: init-copy-cnf
+        image: busybox:1.30
+        command: ["sh","-c"]
+        args:
+        - |
+          mkdir -p /config-out
+          if hostname | grep mysql-0; then
+            cp /config/mysql-master.cnf /config-out/my.cnf
+          else
+            cp /config/mysql-slave.cnf /config-out/my.cnf
+          fi
+        volumeMounts:
+        - name: mysql-config
+          mountPath: /config
+        - name: mysql-config-volume
+          mountPath: /config-out
+
+      containers:
+      - name: mysql
+        image: mysql:5.7
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: root123
+        - name: MYSQL_DATABASE
+          value: ruoyi_vue_pro
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+        - name: mysql-config-volume
+          mountPath: /etc/mysql/conf.d
+        - name: init-db-volume
+          mountPath: /docker-entrypoint-initdb.d
+
+      volumes:
+      - name: mysql-config
+        configMap:
+          name: mysql-config
+      - name: mysql-config-volume
+        emptyDir: {}
+      - name: init-db
+        nfs:
+          server: 172.16.6.106
+          path: /root/data/init-db
+      - name: init-db-volume
+        emptyDir: {}
+      terminationGracePeriodSeconds: 10
+
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-data
+      labels: 
+        app: mysql
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: ruoyi-sc
+      resources:
+        requests:
+          storage: 1Gi
+#  - metadata:
+#      name: init-db-volume
+#      labels:
+#        app: mysql
+#    spec:
+#      accessModes: ["ReadWriteOnce"]
+#      storageClassName: ruoyi-sc
+#      resources:
+#        requests:
+#          storage: 100Mi
+
+---
+# 4. Job：在 slave 节点执行主从配置
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mysql-init-slave
+  namespace: ruoyi-v2
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: config-replication
+        image: mysql:5.7
+        command: ["sh", "-c"]
+        args:
+        - |
+          until mysql -uroot -proot123 -hmysql.ruoyi-v2.svc.cluster.local -e "SELECT 1" 2> /dev/null;do
+          echo "waiting for mysql";
+          sleep 5;
+          done
+          mysql -h mysql-0.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e \
+            "CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED BY 'repl123'; GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%'; FLUSH PRIVILEGES;"
+          log_file=$(mysql -h mysql-0.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e "SHOW MASTER STATUS\G" | grep File | awk '{print $2}')
+          log_pos=$(mysql -h mysql-0.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e "SHOW MASTER STATUS\G" | grep Position | awk '{print $2}')
+          mysql -h mysql-1.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e \
+            "CHANGE MASTER TO MASTER_HOST='mysql-0.mysql.ruoyi-v2.svc.cluster.local', MASTER_USER='repl', MASTER_PASSWORD='repl123', MASTER_LOG_FILE='${log_file}', MASTER_LOG_POS=${log_pos}; START SLAVE;"

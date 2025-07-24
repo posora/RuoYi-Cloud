@@ -1,0 +1,108 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+  namespace: ruoyi-cloud
+data:
+  my.cnf: |
+    [mysqld]
+    character-set-server=utf8mb4
+    collation-server=utf8mb4_general_ci
+    init_connect='SET NAMES utf8mb4'
+  
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ruoyi-mysql
+  namespace: ruoyi-cloud
+spec:
+  selector:
+    matchLabels:
+      app: ruoyi-mysql
+  serviceName: "ruoyi-mysql"
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: ruoyi-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: crpi-yd1hst2e6z04e4nc.cn-hangzhou.personal.cr.aliyuncs.com/cloudruoyi/mysql:ruoyi
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: Aa123qwe
+            - name: MYSQL_DATABASE
+              value: ry-cloud
+            - name: MYSQL_USER
+              value: ruoyi
+            - name: MYSQL_PASSWORD
+              value: Aa123qwe
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_general_ci
+       ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql
+            - name: mysql-config
+              mountPath: /etc/mysql/conf.d
+      volumes:
+        - name: mysql-config
+          configMap:
+            name: mysql-config
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-storage
+      labels:
+        app: ruoyi-mysql
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: ruoyi-sc
+      resources:
+        requests:
+          storage: 1Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruoyi-mysql
+  namespace: ruoyi-cloud
+spec:
+  ports:
+    - port: 3306
+  selector:
+    app: ruoyi-mysql
+  clusterIP: None  # 重要：Headless 服务用于 StatefulSet
+
+---
+# --- Job：初始化授权给 ruoyi 用户
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mysql-grant-ruoyi
+  namespace: ruoyi-cloud
+spec:
+  template:
+    spec:
+      containers:
+        - name: mysql-client
+          image: mysql:5.7
+          command: [ "sh", "-c" ]
+          args:
+            - |
+              echo "Waiting for MySQL to be ready..." &&
+              until mysql -h ruoyi-mysql -uroot -pAa123qwe -e "select 1" &>/dev/null; do
+                sleep 2;
+              done &&
+              echo "MySQL ready, granting privileges..." &&
+              mysql -h ruoyi-mysql -uroot -pAa123qwe -e "
+                GRANT ALL PRIVILEGES ON *.* TO 'ruoyi'@'%' IDENTIFIED BY 'Aa123qwe';
+                FLUSH PRIVILEGES;"
+      restartPolicy: OnFailure

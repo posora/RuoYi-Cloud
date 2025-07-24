@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ruoyi-minio
+  namespace: ruoyi-cloud
+spec:
+  serviceName: ruoyi-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruoyi-minio
+  template:
+    metadata:
+      labels:
+        app: ruoyi-minio
+    spec:
+      containers:
+        - name: minio
+          image: crpi-yd1hst2e6z04e4nc.cn-hangzhou.personal.cr.aliyuncs.com/cloudruoyi/minio:latest
+          args:
+            - server
+            - /data
+            - "--console-address=:9090"
+          ports:
+            - containerPort: 9000
+            - containerPort: 9090
+          env:
+            - name: MINIO_ACCESS_KEY
+              value: minioadmin
+            - name: MINIO_SECRET_KEY
+              value: minioadmin
+          volumeMounts:
+            - name: minio-storage
+              mountPath: /data
+            - name: minio-config
+              mountPath: /root/.minio
+
+  volumeClaimTemplates:
+  - metadata:
+      name: minio-storage
+      labels:
+        app: ruoyi-minio
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: ruoyi-sc
+      resources:
+        requests:
+          storage: 1Gi
+  - metadata:
+      name: minio-config
+      labels:
+        app: ruoyi-minio
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: ruoyi-sc
+      resources:
+        requests:
+          storage: 100Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruoyi-minio
+  namespace: ruoyi-cloud
+spec:
+  type: NodePort
+  selector:
+    app: ruoyi-minio
+  # clusterIP: None
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+      nodePort: 30090
+    - name: console
+      port: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruoyi-minio-headless
+  namespace: ruoyi-cloud
+spec:
+  selector:
+    app: ruoyi-minio
+  clusterIP: None
+  ports:
+    - name: api
+      port: 9000
+    - name: console
+      port: 9090
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-minio-bucket
+  namespace: ruoyi-cloud
+spec:
+  template:
+    spec:
+      containers:
+        - name: mc
+          image: minio/mc
+          command: ["sh", "-c"]
+          args:
+            - >
+              echo '等待 MinIO 启动...';
+              until mc alias set minio http://ruoyi-minio:9000 minioadmin minioadmin; do sleep 2; done &&
+              echo '创建 ruoyi-cloud 桶';
+              mc mb minio/ruoyi-cloud || true &&
+              mc anonymous set public minio/ruoyi-cloud
+      restartPolicy: OnFailure

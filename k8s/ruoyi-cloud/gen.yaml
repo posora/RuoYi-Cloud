@@ -1,0 +1,34 @@
+# ruoyi-gen 微服务
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruoyi-gen
+  namespace: ruoyi-cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruoyi-gen
+  template:
+    metadata:
+      labels:
+        app: ruoyi-gen
+    spec:
+      containers:
+        - name: ruoyi-gen
+          image: crpi-yd1hst2e6z04e4nc.cn-hangzhou.personal.cr.aliyuncs.com/cloudruoyi/gen:ruoyi
+          ports:
+            - containerPort: 9202
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruoyi-gen
+  namespace: ruoyi-cloud
+spec:
+  selector:
+    app: ruoyi-gen
+  ports:
+    - port: 9202
+      targetPort: 9202
+  type: ClusterIP

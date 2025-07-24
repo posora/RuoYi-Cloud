@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruoyi-nacos
+  namespace: ruoyi-cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruoyi-nacos
+  template:
+    metadata:
+      labels:
+        app: ruoyi-nacos
+    spec:
+      containers:
+        - name: nacos
+          image: crpi-yd1hst2e6z04e4nc.cn-hangzhou.personal.cr.aliyuncs.com/cloudruoyi/nacos:v2
+          ports:
+            - containerPort: 8848
+          env:
+            - name: MODE
+              value: standalone
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruoyi-nacos
+  namespace: ruoyi-cloud
+spec:
+  type: NodePort
+  ports:
+    - port: 8848
+      targetPort: 8848
+      nodePort: 30060
+  selector:
+    app: ruoyi-nacos
+
