@@ -145,7 +145,7 @@ metadata:
 spec:
   template:
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       containers:
       - name: config-replication
         image: mysql:5.7
@@ -154,11 +154,19 @@ spec:
         - |
           until mysql -uroot -proot123 -hmysql.ruoyi-v2.svc.cluster.local -e "SELECT 1" 2> /dev/null;do
           echo "waiting for mysql";
-          sleep 5;
+          sleep 2;
           done
           mysql -h mysql-0.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e \
             "CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED BY 'repl123'; GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%'; FLUSH PRIVILEGES;"
           log_file=$(mysql -h mysql-0.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e "SHOW MASTER STATUS\G" | grep File | awk '{print $2}')
           log_pos=$(mysql -h mysql-0.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e "SHOW MASTER STATUS\G" | grep Position | awk '{print $2}')
-          mysql -h mysql-1.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e \
-            "CHANGE MASTER TO MASTER_HOST='mysql-0.mysql.ruoyi-v2.svc.cluster.local', MASTER_USER='repl', MASTER_PASSWORD='repl123', MASTER_LOG_FILE='${log_file}', MASTER_LOG_POS=${log_pos}; START SLAVE;"
+          mysql -h mysql-1.mysql.ruoyi-v2.svc.cluster.local -uroot -proot123 -e "
+            STOP SLAVE IO_THREAD;
+            CHANGE MASTER TO
+              MASTER_HOST='mysql-0.mysql.ruoyi-v2.svc.cluster.local',
+              MASTER_USER='repl',
+              MASTER_PASSWORD='repl123',
+              MASTER_LOG_FILE='${log_file}',
+              MASTER_LOG_POS=${log_pos};
+            START SLAVE;"          
+          echo "Successfully completed!"
